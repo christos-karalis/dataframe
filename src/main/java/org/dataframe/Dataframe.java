@@ -1,5 +1,8 @@
 package org.dataframe;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
 import java.lang.reflect.Array;
@@ -13,9 +16,12 @@ import java.util.stream.Stream;
 
 public class Dataframe {
 
+    private static final Logger logger = LogManager.getLogger(Dataframe.class);
+
     private final String[] columnNames;
     private final Object[][] data;
     private final int numberOfRows;
+
 
     private Dataframe(Object[][] data, int numberOfRows) {
         this.data = data;
@@ -186,8 +192,6 @@ public class Dataframe {
         }
     }
 
-
-
     public class DataframeGroupBy {
         private Map<CompositeKey, List<Integer>> map;
         private int keySize;
@@ -345,8 +349,12 @@ public class Dataframe {
                 .mapToObj(rowC -> {
                     Object[] keys = IntStream.range(0, indices.length)
                             .mapToObj(i -> data[indices[i]][rowC]).toArray(Object[]::new);
-                    return new IndexEntry<CompositeKey>(rowC, new CompositeKey(keys));
-                }).collect(Collectors.groupingBy(IndexEntry::getValue, Collectors.mapping(IndexEntry::getKey, Collectors.toList())));
+                    return new IndexEntry<>(rowC, new CompositeKey(keys));
+                })
+                .parallel().map(x -> {
+                    String collect1 = Stream.of(x.getValue().keys).map(String.class::cast).collect(Collectors.joining(" "));
+                    logger.debug(collect1);return x;})
+                .collect(Collectors.groupingBy(IndexEntry::getValue, Collectors.mapping(IndexEntry::getKey, Collectors.toList())));
         return new DataframeGroupBy(collect, indices.length);
     }
 
@@ -370,7 +378,7 @@ public class Dataframe {
     private static class CompositeKey {
         private Object[] keys;
 
-        public CompositeKey(Object... keys) {
+        CompositeKey(Object... keys) {
             this.keys = keys;
         }
 

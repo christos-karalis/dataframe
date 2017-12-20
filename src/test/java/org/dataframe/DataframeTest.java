@@ -1,18 +1,19 @@
 package org.dataframe;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
 import org.mockito.*;
 
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.DoubleSummaryStatistics;
 import java.util.Random;
-import java.util.stream.Stream;
 
 public class DataframeTest {
+
+    private static final Logger logger = LogManager.getLogger(DataframeTest.class);
 
     @Mock
     private EntityManager entityManager;
@@ -26,6 +27,7 @@ public class DataframeTest {
 
         Random random = new Random();
         ArrayList<Object[]> list = new ArrayList();
+
 
         int maxSize = 100000;
         Object[] orgCountry = random.ints(0, 5).limit(maxSize).mapToObj(i -> new String[]{"GRE", "ITA", "UK", "ALB", "EU"}[i]).toArray();
@@ -45,11 +47,11 @@ public class DataframeTest {
                 random.doubles(0, 120.0),
                 random.doubles(0, 1200.0)
         ).columnNames("ORG_COUNTRY", "DEST_COUNTRY", "RATE_PLAN", "TYPE", "CHARGE", "DURATION").size(10000).build();
-//        System.out.println(
+//        logger.debug(
 //            dataframe.groupBy(2).aggregate(4, 5)
 //        );
-        Dataframe aggregate = dataframe.groupBy(2).aggregate("CHARGE", "DURATION");
-//        System.out.println(
+        Dataframe aggregate = dataframe.groupBy(1, 2).aggregate("CHARGE", "DURATION");
+//        logger.debug(
 //                aggregate
 //        );
 //        list.add(new Object[]{ "RPLAN100", BigDecimal.valueOf(10.1), "VOICE"});
@@ -66,18 +68,18 @@ public class DataframeTest {
 
         dataframe.sort(5);
 
-//        dataframe.groupBy(0).values().stream().forEach(value -> {System.out.println(value.size());});
+//        dataframe.groupBy(0).values().stream().forEach(value -> {logger.debug(value.size());});
 //        dataframe.groupBy(0).sum(1).sum(1);
-        System.out.println(dataframe.groupBy(0).aggregate(new int[]{4}));
-        System.out.println(dataframe.groupBy(2).aggregate(4));
-        System.out.println(dataframe.groupBy(2, 0).aggregate(4));
-        System.out.println(dataframe.groupBy("RATE_PLAN").aggregate(4));
-        System.out.println(dataframe.groupBy(new Integer[]{2, 0}).aggregate(4));
+//        logger.debug(dataframe.groupBy(0).aggregate(new int[]{4}));
+//        logger.debug(dataframe.groupBy(2).aggregate(4));
+//        logger.debug(dataframe.groupBy(2, 0).aggregate(4));
+//        logger.debug(dataframe.groupBy("RATE_PLAN").aggregate(4));
+//        logger.debug(dataframe.groupBy(new Integer[]{2, 0}).aggregate(4));
 
-        System.out.println(dataframe.groupBy("TYPE").aggregate(4));
-        System.out.println(dataframe);
+//        logger.debug(dataframe.groupBy("TYPE").aggregate(4));
+//        logger.debug(dataframe);
 
-        System.out.println(dataframe.sum(4));
+        logger.debug(dataframe.sum(4));
     }
 
 }
