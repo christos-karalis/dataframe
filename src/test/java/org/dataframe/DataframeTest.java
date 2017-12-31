@@ -34,7 +34,7 @@ public class DataframeTest {
                 Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
                 Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
                 Dataframe.choice(random, "RPLAN100", "RPLAN10", "RPLAN30"),
-                Dataframe.choice(random, "VOICE", "PIBX", "DATA"),
+                Dataframe.choice(random, "VOICE", "DATA"),
                 random.doubles(0, 120.0),
                 random.doubles(0, 1200.0)
         ).columnNames("ORG_COUNTRY", "DEST_COUNTRY", "RATE_PLAN", "TYPE", "CHARGE", "DURATION").size(maxSize).build();
@@ -42,6 +42,28 @@ public class DataframeTest {
         Assert.assertEquals(dataframe.sum("CHARGE"), dataframe.sum(4), 0);
         Assert.assertEquals(dataframe.sum("CHARGE"), dataframe.average(4)*dataframe.getNumberOfRows(), 0);
     }
+
+
+    @Test
+    public void testSelect() {
+        Random random = new Random();
+
+        int maxSize = 1_000_000;
+        Dataframe dataframe = new Dataframe.StreamDataframeBuilder(
+                Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
+                Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
+                Dataframe.choice(random, "RPLAN100", "RPLAN10", "RPLAN30"),
+                Dataframe.choice(random, "VOICE", "DATA"),
+                random.doubles(0, 120.0),
+                random.doubles(0, 1200.0)
+        ).columnNames("ORG_COUNTRY", "DEST_COUNTRY", "RATE_PLAN", "TYPE", "CHARGE", "DURATION").size(maxSize).build();
+
+
+        long total = dataframe.selectByName(row -> row.get("TYPE").equals("VOICE")).count() + dataframe.selectByName(row -> row.get("TYPE").equals("DATA")).count();
+        Assert.assertEquals(total, dataframe.count());
+        Assert.assertEquals(dataframe.sum("CHARGE"), dataframe.average(4)*dataframe.getNumberOfRows(), 0);
+    }
+
 
     @Test
     public void groupBy() {
@@ -52,7 +74,7 @@ public class DataframeTest {
                 Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
                 Dataframe.choice(random, "GRE", "ITA", "UK", "ALB", "EU"),
                 Dataframe.choice(random, "RPLAN100", "RPLAN10", "RPLAN30"),
-                Dataframe.choice(random, "VOICE", "PIBX", "DATA"),
+                Dataframe.choice(random, "VOICE", "DATA"),
                 random.doubles(0, 120.0),
                 random.doubles(0, 1200.0)
         ).columnNames("ORG_COUNTRY", "DEST_COUNTRY", "RATE_PLAN", "TYPE", "CHARGE", "DURATION").size(maxSize).build();
@@ -97,5 +119,7 @@ public class DataframeTest {
         dataframe.sort(5);
 
     }
+
+
 
 }
