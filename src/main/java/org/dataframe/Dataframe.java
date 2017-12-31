@@ -2,17 +2,17 @@ package org.dataframe;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.roaringbitmap.RoaringBitmap;
 
 import javax.persistence.EntityManager;
 import javax.persistence.Query;
+import javax.xml.crypto.Data;
 import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.BaseStream;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
+import java.util.function.Predicate;
+import java.util.stream.*;
 
 public class Dataframe {
 
@@ -46,16 +46,21 @@ public class Dataframe {
     }
 
     public Dataframe sort(int index) {
-        BTreeIndex root = new BTreeIndex(0, index);
+        return sort(index, true);
+    }
+
+
+    public Dataframe sort(int index, boolean ascending) {
+        UnbalancedBTreeIndex root = new UnbalancedBTreeIndex(0, index);
         for (int i = 1; i<data[index].length; i++) {
-            new BTreeIndex(i, index).insert(root);
+            new UnbalancedBTreeIndex(i, index).insert(root);
         }
         Object[][] data = new Object[Dataframe.this.data.length][];
         for (int i = 0; i< Dataframe.this.data.length ; i++) {
             data[i] = ofType(Dataframe.this.data[i][0].getClass(), Dataframe.this.data[i].length);
         }
 
-        root.sort(false, data);
+        root.sort(ascending, data);
         return new Dataframe(data, columnNames, numberOfRows);
     }
 
@@ -192,44 +197,12 @@ public class Dataframe {
         }
     }
 
-    public class DataframeGroupBy {
-        private Map<CompositeKey, List<Integer>> map;
-        private int keySize;
+    public class DataframeGroupBy<T extends Iterable<Integer>> {
+        Map<CompositeKey, T> map;
+        int keySize;
+        String[] columnNames;
 
-        private DataframeGroupBy(Map<CompositeKey, List<Integer>> map, int keySize) {
-            this.map = map;
-            this.keySize = keySize;
-        }
-
-        public Dataframe aggregate(String... columnName) {
-            int[] indexes = Stream.of(columnName).mapToInt(Dataframe.this::findColumnIndexByName).toArray();
-            return aggregate(indexes);
-        }
-
-        /**
-         * Creates a new dataframe that contains grouped by indexed columns once per
-         * @param index
-         * @return
-         */
-        public Dataframe aggregate(int... index) {
-            Object[][] data = new Object[map.keySet().iterator().next().keys.length+index.length][];
-            AtomicInteger counter = new AtomicInteger(0);
-            map.forEach((compositeKey, value) -> {
-                int rowIndex = counter.getAndIncrement();
-                initialize(data, rowIndex, compositeKey);
-                IntStream.range(0, index.length).forEach(indexIndex -> {
-                    if (data[keySize+indexIndex]==null) {
-                        data[keySize+indexIndex] = new DoubleSummaryStatistics[map.size()];
-                    }
-                    data[keySize+indexIndex][rowIndex] = value.stream().map(val -> Dataframe.this.data[index[indexIndex]][val])
-                            .filter(Number.class::isInstance).map(Number.class::cast)
-                            .collect(Collectors.summarizingDouble(Number::doubleValue));
-                });
-            });
-            return new Dataframe(data, map.values().size());
-        }
-
-        private void initialize(Object[][] data, int counter, CompositeKey compositeKey) {
+        void initialize(Object[][] data, int counter, CompositeKey compositeKey) {
             IntStream.range(0, keySize)
                     .forEach(i -> {
                         if (data[i]==null) {
@@ -238,28 +211,119 @@ public class Dataframe {
                         data[i][counter] = compositeKey.keys[i];
                     });
         }
+
+        DataframeGroupBy(Map<CompositeKey, T> map, int keySize) {
+            this.map = map;
+            this.keySize = keySize;
+        }
+
+        DataframeGroupBy(Map<CompositeKey, T> map, String[] columnNames, int keySize) {
+            this.map = map;
+            this.columnNames = columnNames;
+            this.keySize = keySize;
+        }
+
+        /**
+         * Returns an aggregate
+         * the type of aggregated values is {@link DoubleSummaryStatistics}, it is not supported by second aggregate now
+         * @param columnName
+         * @return
+         */
+        public Dataframe aggregate(String... columnName) {
+            Integer[] indexes = Stream.of(columnName).map(Dataframe.this::findColumnIndexByName).toArray(Integer[]::new);
+            return aggregate(indexes);
+        }
+
+        /**
+         * Creates a new dataframe that contains grouped by indexed columns once per
+         * @param indices
+         * @return
+         */
+        public Dataframe aggregate(Integer... indices) {
+            String[] newColumnNames = generateColumnNames(indices);
+
+            Object[][] data = new Object[map.keySet().iterator().next().keys.length+indices.length][];
+            AtomicInteger counter = new AtomicInteger(0);
+            map.forEach((compositeKey, value) -> {
+                int rowIndex = counter.getAndIncrement();
+                initialize(data, rowIndex, compositeKey);
+                IntStream.range(0, indices.length).forEach(indexIndex -> {
+                    if (data[keySize+indexIndex]==null) {
+                        data[keySize+indexIndex] = new DoubleSummaryStatistics[map.size()];
+                    }
+                    Stream<Integer> stream = StreamSupport.stream(Spliterators.spliterator(value.iterator(), numberOfRows / map.size(), Spliterator.ORDERED), false);
+                    data[keySize+indexIndex][rowIndex] = stream.map(val -> Dataframe.this.data[indices[indexIndex]][val])
+                            .filter(Number.class::isInstance).map(Number.class::cast)
+                            .collect(Collectors.summarizingDouble(Number::doubleValue));
+                });
+            });
+            return new Dataframe(data, newColumnNames, map.values().size());
+        }
+
+        private String[] generateColumnNames(Integer[] indices) {
+            String[] newColumnNames = null;
+            if (Dataframe.this.columnNames!=null && Dataframe.this.columnNames.length>0
+                    && columnNames!=null && columnNames.length>0) {
+                String[] aggregates = Stream.of(indices).map(index -> Dataframe.this.columnNames[index]).toArray(String[]::new);
+                newColumnNames = Arrays.copyOf(columnNames, aggregates.length+columnNames.length);
+                System.arraycopy(aggregates, 0, newColumnNames, columnNames.length, aggregates.length);
+            }
+            return newColumnNames;
+        }
+
+
+        public Dataframe sum(String... columnName) {
+            Integer[] indexes = Stream.of(columnName).map(Dataframe.this::findColumnIndexByName).toArray(Integer[]::new);
+            return sum(indexes);
+        }
+
+        /**
+         * Creates a new dataframe that contains grouped by indexed columns once per
+         * @param indices
+         * @return
+         */
+        public Dataframe sum(Integer... indices) {
+            String[] newColumnNames = generateColumnNames(indices);
+
+            Object[][] data = new Object[map.keySet().iterator().next().keys.length+indices.length][];
+            AtomicInteger counter = new AtomicInteger(0);
+            map.forEach((compositeKey, value) -> {
+                int rowIndex = counter.getAndIncrement();
+                initialize(data, rowIndex, compositeKey);
+                IntStream.range(0, indices.length).forEach(indexIndex -> {
+                    if (data[keySize+indexIndex]==null) {
+                        data[keySize+indexIndex] = new Double[map.size()];
+                    }
+                    Stream<Integer> stream = StreamSupport.stream(Spliterators.spliterator(value.iterator(), numberOfRows / map.size(), Spliterator.ORDERED), false);
+                    data[keySize+indexIndex][rowIndex] = stream.map(val -> Dataframe.this.data[indices[indexIndex]][val])
+                            .filter(Number.class::isInstance).map(Number.class::cast)
+                            .collect(Collectors.summarizingDouble(Number::doubleValue)).getSum();
+                });
+            });
+            return new Dataframe(data, newColumnNames, map.values().size());
+        }
     }
 
-    public class BTreeIndex {
-        private BTreeIndex asc;
-        private BTreeIndex desc;
+    public class UnbalancedBTreeIndex {
+        private UnbalancedBTreeIndex asc;
+        private UnbalancedBTreeIndex desc;
         private int columnIndex;
         private int index;
 
-        private BTreeIndex(int index, int columnIndex) {
+        private UnbalancedBTreeIndex(int index, int columnIndex) {
             this.index = index;
             this.columnIndex = columnIndex;
         }
 
-        public BTreeIndex asc() {
+        public UnbalancedBTreeIndex asc() {
             return asc;
         }
 
-        public BTreeIndex desc() {
+        public UnbalancedBTreeIndex desc() {
             return desc;
         }
 
-        public BTreeIndex insert(BTreeIndex root) {
+        public UnbalancedBTreeIndex insert(UnbalancedBTreeIndex root) {
             if (((Number) data[columnIndex][index]).doubleValue() >
                     ((Number) data[root.columnIndex][root.index]).doubleValue()) {
                 if (root.asc==null) {
@@ -333,10 +397,10 @@ public class Dataframe {
         return match.isPresent() ? match.get().getKey() : -1;//will break subsequent method
     }
 
-    public DataframeGroupBy groupBy(String... columnNames) {
+    public DataframeGroupBy groupBy(boolean bitmap, String... columnNames) {
         Integer[] indices = Stream.of(columnNames).map(this::findColumnIndexByName)
                 .toArray(Integer[]::new);
-        return groupBy(indices);
+        return groupBy(bitmap, indices);
     }
 
     /**
@@ -344,19 +408,39 @@ public class Dataframe {
      * @param indices column indices to group by
      * @return
      */
-    public DataframeGroupBy groupBy(Integer... indices) {
-        Map<CompositeKey, List<Integer>> collect = IntStream.range(0, numberOfRows)
-                .mapToObj(rowC -> {
-                    Object[] keys = IntStream.range(0, indices.length)
-                            .mapToObj(i -> data[indices[i]][rowC]).toArray(Object[]::new);
-                    return new IndexEntry<>(rowC, new CompositeKey(keys));
-                })
-                .parallel().map(x -> {
-                    String collect1 = Stream.of(x.getValue().keys).map(String.class::cast).collect(Collectors.joining(" "));
-                    logger.debug(collect1);return x;})
-                .collect(Collectors.groupingBy(IndexEntry::getValue, Collectors.mapping(IndexEntry::getKey, Collectors.toList())));
-        return new DataframeGroupBy(collect, indices.length);
+    public DataframeGroupBy groupBy(boolean bitmap, Integer... indices) {
+        String[] groupedBy = null;
+        if (columnNames!=null && columnNames.length>0) {
+            groupedBy = Stream.of(indices).map(index -> columnNames[index]).toArray(String[]::new);
+        }
+
+        if (bitmap) {
+            Collector<Integer, RoaringBitmap, RoaringBitmap> bitmapCollector = Collector.of(RoaringBitmap::new, (x,y)-> x.add(y), (left, right) -> {
+                right.forEach((Integer x) -> left.add(x));
+                return left;
+            }, Collector.Characteristics.IDENTITY_FINISH);
+            Map<CompositeKey, RoaringBitmap> collect = IntStream.range(0, numberOfRows)
+                    .parallel()
+                    .mapToObj(rowC -> {
+                        Object[] keys = IntStream.range(0, indices.length)
+                                .mapToObj(i -> data[indices[i]][rowC]).toArray(Object[]::new);
+                        return new IndexEntry<>(rowC, new CompositeKey(keys));
+                    })
+                    .collect(Collectors.groupingBy(IndexEntry::getValue, Collectors.mapping(IndexEntry::getKey, bitmapCollector)));
+            return new DataframeGroupBy(collect, groupedBy, indices.length);
+        } else {
+            Map<CompositeKey, List<Integer>> collect = IntStream.range(0, numberOfRows)
+                    .parallel()
+                    .mapToObj(rowC -> {
+                        Object[] keys = IntStream.range(0, indices.length)
+                                .mapToObj(i -> data[indices[i]][rowC]).toArray(Object[]::new);
+                        return new IndexEntry<>(rowC, new CompositeKey(keys));
+                    })
+                    .collect(Collectors.groupingBy(IndexEntry::getValue, Collectors.mapping(IndexEntry::getKey, Collectors.toList())));
+            return new DataframeGroupBy(collect, groupedBy, indices.length);
+        }
     }
+
 
     public double sum(int index) {
         Stream<Object> data = Stream.of(this.data[index]);
@@ -364,11 +448,102 @@ public class Dataframe {
         return collect.getSum();
     }
 
+    public double sum(String columnName) {
+        Stream<Object> data = Stream.of(this.data[findColumnIndexByName(columnName)]);
+        DoubleSummaryStatistics collect = data.collect(Collectors.summarizingDouble(row -> ((Number) row).doubleValue()));
+        return collect.getSum();
+    }
+
+    public double average(int index) {
+        Stream<Object> data = Stream.of(this.data[index]);
+        DoubleSummaryStatistics collect = data.collect(Collectors.summarizingDouble(row -> ((Number) row).doubleValue()));
+        return collect.getAverage();
+    }
+
+    public double average(String columnName) {
+        Stream<Object> data = Stream.of(this.data[findColumnIndexByName(columnName)]);
+        DoubleSummaryStatistics collect = data.collect(Collectors.summarizingDouble(row -> ((Number) row).doubleValue()));
+        return collect.getAverage();
+    }
+
+    public int getNumberOfRows() {
+        return numberOfRows;
+    }
+
+    public class RowMap extends Dictionary<String, Object> {
+
+        private Object[] data;
+
+        public RowMap(Object[] data) {
+            this.data = data;
+        }
+
+        @Override
+        public int size() {
+            return data.length;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return data!=null&&data.length>0;
+        }
+
+        @Override
+        public Enumeration<String> keys() {
+            return Collections.enumeration(Arrays.asList(columnNames));
+        }
+
+        @Override
+        public Enumeration<Object> elements() {
+            return Collections.enumeration(Arrays.asList(data));
+        }
+
+        @Override
+        public Object get(Object key) {
+            return Optional.ofNullable(key).filter(String.class::isInstance).map(String.class::cast)
+                    .map(Dataframe.this::findColumnIndexByName).map(i->data[i]).orElse(null);
+        }
+
+        @Override
+        public Object put(String key, Object value) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Object remove(Object key) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    public Dataframe select(Predicate<Object[]> select) {
+        List<Integer> collect = IntStream.range(0, numberOfRows)
+                .filter(row -> select.test(IntStream.range(0, data.length).mapToObj(column -> data[column][row]).toArray()))
+                .mapToObj(Integer::valueOf).collect(Collectors.toList());
+        Object[][] objects = IntStream.range(0, data.length).mapToObj(column -> collect.stream().map(row -> data[column][row]).toArray()).toArray(Object[][]::new);
+        return new Dataframe(objects, columnNames, collect.size());
+    }
+
+    public Dataframe selectByName(Predicate<RowMap> select) {
+        List<Integer> collect = IntStream.range(0, numberOfRows)
+                .filter(row -> select.test(new RowMap(IntStream.range(0, data.length).mapToObj(column -> data[column][row]).toArray())))
+                .mapToObj(Integer::valueOf).collect(Collectors.toList());
+        Object[][] objects = IntStream.range(0, data.length).mapToObj(column -> collect.stream().map(row -> data[column][row]).toArray()).toArray(Object[][]::new);
+        return new Dataframe(objects, columnNames, collect.size());
+    }
+
+    public long count() {
+        return numberOfRows;
+    }
+
+    public Object[] distinct(int index) {
+        return Stream.of(data[index]).distinct().toArray();
+    }
+
     @Override
     public String toString() {
         StringBuilder s = new StringBuilder();
         Stream.of(data)
-                .forEach(row -> s.append(Arrays.toString(row)));
+                .forEach(row -> s.append(Arrays.toString(row)).append("\n"));
 
         return "Dataframe{" +
                 "data=" + s.toString() +
